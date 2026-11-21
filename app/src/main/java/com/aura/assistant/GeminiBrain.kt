@@ -240,7 +240,7 @@ object GeminiBrain {
 " +
                     "- SCREEN_CMD: {"cmd":"back|home|scroll_down|scroll_up|click|type","target":"teks tombol atau input"}
 " +
-                    "- OPEN_APP: {"app":"nama aplikasi"}
+                    "- OPEN_APP: {\"app\":\"nama aplikasi\"}"
 " +
                     "Jika hanya obrolan biasa tanpa perintah HP, jangan sertakan tag [ACTION:...]."
 
