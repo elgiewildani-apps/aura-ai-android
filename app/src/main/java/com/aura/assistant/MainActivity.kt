@@ -163,7 +163,7 @@ class MainActivity : AppCompatActivity() {
         val batOk = if (isIgnoringBatteryOptimizations()) "OK" else "Belum"
 
         tvPermissionSummary.text =
-            "Mikrofon: $micOk | Floating: $overlayOk | Kontrol Layar: $accOk | Notifikasi: $notifOk | Baterai: $batOk"
+            "Mikrofon: $micOk \vert{} Floating:$overlayOk | Kontrol Layar: $accOk \vert{} Notifikasi: $notifOk \vert{} Baterai: $batOk"
     }
 
     private fun hasMicPermission(): Boolean =
@@ -191,13 +191,4 @@ class MainActivity : AppCompatActivity() {
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
-        return pm.isIgnoringBatteryOptimizations(packageName)
-    }
-
-    private fun appendLog(line: String) {
-        val current = tvChatLog.text.toString()
-        val updated = "$current$line"
-        tvChatLog.text = if (updated.length > 4000) updated.takeLast(4000) else updated
-    }
-}
+        val pm = getSystemService
