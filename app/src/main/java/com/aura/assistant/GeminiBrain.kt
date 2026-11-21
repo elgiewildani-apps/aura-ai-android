@@ -15,6 +15,7 @@ import java.util.Locale
 object GeminiBrain {
 
     private val conversationHistory = mutableListOf<Pair<String, String>>()
+    @Volatile private var cachedModelName: String? = null
 
     suspend fun processInput(context: Context, userText: String): String {
         val clean = userText.trim()
@@ -190,8 +191,44 @@ object GeminiBrain {
         return null
     }
 
-    private fun requestEndpoint(endpointUrl: String, payload: String): Pair<Int, String> {
-        val url = URL(endpointUrl)
+    private fun discoverAvailableModel(apiKey: String): Pair<String?, String> {
+        val listUrl = URL("https://generativelanguage.googleapis.com/v1beta/models?key=$apiKey")
+        val conn = (listUrl.openConnection() as HttpURLConnection).apply {
+            requestMethod = "GET"
+            connectTimeout = 15000
+            readTimeout = 15000
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val raw = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+
+        if (code !in 200..299) {
+            return null to "ListModels gagal (kode $code): ${raw.take(180)}"
+        }
+
+        val modelsArr = JSONObject(raw).optJSONArray("models") ?: return null to "Tidak ada daftar model."
+        val candidates = mutableListOf<String>()
+        for (i in 0 until modelsArr.length()) {
+            val item = modelsArr.optJSONObject(i) ?: continue
+            val rawName = item.optString("name", "")
+            val methods = item.optJSONArray("supportedGenerationMethods")?.toString() ?: ""
+            if (rawName.isNotEmpty() && methods.contains("generateContent")) {
+                val shortName = rawName.removePrefix("models/")
+                candidates.add(shortName)
+            }
+        }
+
+        val preferred = listOf("gemini-2.5-flash", "gemini-2.0-flash", "gemini-flash-latest", "gemini-1.5-flash")
+        for (p in preferred) {
+            if (candidates.contains(p)) return p to candidates.joinToString(", ")
+        }
+        val firstFlash = candidates.firstOrNull { it.contains("flash") } ?: candidates.firstOrNull()
+        return firstFlash to candidates.joinToString(", ")
+    }
+
+    private fun postGenerate(modelName: String, apiKey: String, payload: String): Pair<Int, String> {
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey")
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
@@ -247,42 +284,38 @@ object GeminiBrain {
                         .put("parts", JSONArray().put(JSONObject().put("text", userText)))
                 )
 
-                val v1betaPayload = JSONObject()
+                val payload = JSONObject()
                     .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", instructionText))))
                     .put("contents", contentsArray)
                     .toString()
 
-                val v1Contents = JSONArray()
-                v1Contents.put(
-                    JSONObject()
-                        .put("role", "user")
-                        .put("parts", JSONArray().put(JSONObject().put("text", "$instructionText\n\nPesan pengguna: $userText")))
-                )
-                val v1Payload = JSONObject()
-                    .put("contents", v1Contents)
-                    .toString()
-
-                val targets = listOf(
-                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey" to v1betaPayload,
-                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey" to v1betaPayload,
-                    "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=$apiKey" to v1Payload,
-                    "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=$apiKey" to v1Payload,
-                    "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=$apiKey" to v1Payload
-                )
-
-                var lastCode = 0
-                var rawResponse = ""
-
-                for ((endpoint, payload) in targets) {
-                    val (code, body) = requestEndpoint(endpoint, payload)
-                    lastCode = code
-                    rawResponse = body
-                    if (code in 200..299) break
-                    if (code != 404 && code != 400) break
+                var modelToUse = cachedModelName
+                if (modelToUse == null) {
+                    val (foundModel, detailInfo) = discoverAvailableModel(apiKey)
+                    if (foundModel == null) {
+                        return@withContext "Koneksi AI bermasalah (404). $detailInfo"
+                    }
+                    modelToUse = foundModel
+                    cachedModelName = foundModel
                 }
 
-                if (lastCode !in 200..299) {
-                    return@withContext "Koneksi AI bermasalah (kode $lastCode). Pastikan API Key valid dan Gemini API aktif di Google AI Studio."
+                var (code, rawResponse) = postGenerate(modelToUse, apiKey, payload)
+                if (code == 404) {
+                    cachedModelName = null
+                    val (refreshedModel, detailInfo) = discoverAvailableModel(apiKey)
+                    if (refreshedModel != null) {
+                        modelToUse = refreshedModel
+                        cachedModelName = refreshedModel
+                        val retry = postGenerate(refreshedModel, apiKey, payload)
+                        code = retry.first
+                        rawResponse = retry.second
+                    } else {
+                        return@withContext "Koneksi AI bermasalah (404). $detailInfo"
+                    }
+                }
+
+                if (code !in 200..299) {
+                    return@withContext "Koneksi AI bermasalah (kode $code) pada model $modelToUse."
                 }
 
                 val json = JSONObject(rawResponse)
