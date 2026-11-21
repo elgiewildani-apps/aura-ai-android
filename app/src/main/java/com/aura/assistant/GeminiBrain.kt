@@ -33,7 +33,7 @@ object GeminiBrain {
             return aiResponse
         }
 
-        val fallback = "Aku mengerti ucapanmu: \"$clean\". Untuk ngobrol bebas 24 jam tentang topik apa saja, masukkan Gemini API Key di layar utama AURA."
+        val fallback = "Aku mengerti ucapanmu: $clean. Untuk ngobrol bebas 24 jam tentang topik apa saja, masukkan Gemini API Key di layar utama AURA."
         recordTurn(clean, fallback)
         return fallback
     }
@@ -45,6 +45,17 @@ object GeminiBrain {
                 conversationHistory.removeAt(0)
             }
         }
+    }
+
+    private fun findTargetAfter(text: String, keywords: List<String>): String {
+        val lower = text.lowercase(Locale.getDefault())
+        for (kw in keywords) {
+            val idx = lower.indexOf(kw)
+            if (idx != -1) {
+                return text.substring(idx + kw.length).trim()
+            }
+        }
+        return ""
     }
 
     private fun tryOfflineCommand(context: Context, text: String): String? {
@@ -106,7 +117,7 @@ object GeminiBrain {
         }
 
         if (lower.contains("kai") || lower.contains("tiket kereta")) {
-            val dest = extractAfterKeyword(lower, listOf("ke ", "tujuan "))
+            val dest = findTargetAfter(lower, listOf("ke ", "tujuan "))
             return DeviceController.executeAction(context, "KAI", JSONObject().put("destination", dest))
         }
 
@@ -117,12 +128,11 @@ object GeminiBrain {
                 lower.contains("bus") -> "bus"
                 else -> "pesawat"
             }
-            val dest = extractAfterKeyword(lower, listOf("ke ", "tujuan ", "di "))
-            return DeviceController.executeAction(
-                context,
-                "TRAVELOKA",
-                JSONObject().put("category", cat).put("destination", dest)
-            )
+            val dest = findTargetAfter(lower, listOf("ke ", "tujuan ", "di "))
+            val params = JSONObject()
+            params.put("category", cat)
+            params.put("destination", dest)
+            return DeviceController.executeAction(context, "TRAVELOKA", params)
         }
 
         if (lower.contains("gojek") || lower.contains("goride") || lower.contains("gocar") || lower.contains("gofood")) {
@@ -131,15 +141,144 @@ object GeminiBrain {
                 lower.contains("gofood") || lower.contains("makan") -> "gofood"
                 else -> "goride"
             }
-            val dest = extractAfterKeyword(lower, listOf("ke ", "tujuan ", "pesan "))
-            return DeviceController.executeAction(
-                context,
-                "GOJEK",
-                JSONObject().put("service", svc).put("destination", dest)
-            )
+            val dest = findTargetAfter(lower, listOf("ke ", "tujuan ", "pesan "))
+            val params = JSONObject()
+            params.put("service", svc)
+            params.put("destination", dest)
+            return DeviceController.executeAction(context, "GOJEK", params)
         }
 
         if (lower.contains("youtube") || lower.startsWith("putar ")) {
             val q = lower
                 .replace("buka youtube", "")
                 .replace("putar di youtube", "")
+                .replace("cari di youtube", "")
+                .replace("youtube", "")
+                .replace("putar ", "")
+                .trim()
+            return DeviceController.executeAction(context, "YOUTUBE", JSONObject().put("query", q))
+        }
+
+        if (lower.contains("whatsapp") || lower.startsWith("wa ") || lower.contains("kirim wa")) {
+            val afterKe = findTargetAfter(text, listOf("ke ", "kepada "))
+            val parts = afterKe.split(" ", limit = 2)
+            val contact = if (parts.isNotEmpty()) parts[0] else ""
+            val msg = if (parts.size > 1) parts[1] else ""
+            val params = JSONObject()
+            params.put("contact", contact)
+            params.put("message", msg)
+            return DeviceController.executeAction(context, "WHATSAPP", params)
+        }
+
+        if (lower.startsWith("telepon ") || lower.startsWith("telpon ") || lower.startsWith("panggil ")) {
+            val target = text.substringAfter(" ").trim()
+            return DeviceController.executeAction(context, "CALL", JSONObject().put("target", target))
+        }
+
+        if (lower.contains("navigasi") || lower.contains("rute ke") || lower.contains("maps")) {
+            val dest = findTargetAfter(lower, listOf("ke ", "menuju "))
+            return DeviceController.executeAction(context, "MAPS", JSONObject().put("destination", dest))
+        }
+
+        if (lower == "kembali" || lower == "back") {
+            return DeviceController.executeAction(context, "SCREEN_CMD", JSONObject().put("cmd", "back"))
+        }
+        if (lower == "ke beranda" || lower == "home") {
+            return DeviceController.executeAction(context, "SCREEN_CMD", JSONObject().put("cmd", "home"))
+        }
+
+        return null
+    }
+
+    private suspend fun callGeminiApi(context: Context, apiKey: String, userText: String): String =
+        withContext(Dispatchers.IO) {
+            try {
+                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
+                val conn = (url.openConnection() as HttpURLConnection).apply {
+                    requestMethod = "POST"
+                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+                    connectTimeout = 15000
+                    readTimeout = 20000
+                    doOutput = true
+                }
+
+                val systemInstruction = listOf(
+                    "Kamu adalah AURA, asisten AI pribadi Android 24/7 yang ramah, cerdas, dan berbicara Bahasa Indonesia natural (singkat, jelas, enak didengar lewat suara TTS, hindari simbol bintang atau pagar).",
+                    "Jika pengguna meminta melakukan tindakan di HP, jawab singkat lalu akhiri dengan tepat SATU tag JSON di baris paling akhir:",
+                    "[ACTION:{\"type\":\"NAMA_AKSI\",\"params\":{...}}]",
+                    "Daftar NAMA_AKSI yang didukung:",
+                    "- SET_ALARM: {\"hour\":5,\"minute\":30,\"label\":\"Bangun\"}",
+                    "- SET_TIMER: {\"seconds\":300,\"label\":\"Masak\"}",
+                    "- TORCH: {\"on\":true}",
+                    "- VOLUME: {\"mode\":\"up/down/mute/unmute\"}",
+                    "- CALL: {\"target\":\"nama atau nomor\"}",
+                    "- WHATSAPP: {\"contact\":\"nama atau nomor\",\"message\":\"isi pesan\"}",
+                    "- KAI: {\"origin\":\"asal\",\"destination\":\"tujuan\",\"date\":\"besok\"}",
+                    "- TRAVELOKA: {\"category\":\"pesawat/hotel/kereta/bus\",\"destination\":\"tujuan\"}",
+                    "- GOJEK: {\"service\":\"goride/gocar/gofood\",\"destination\":\"tujuan\"}",
+                    "- YOUTUBE: {\"query\":\"judul video atau lagu\"}",
+                    "- MAPS: {\"destination\":\"alamat tujuan\"}",
+                    "- READ_NOTIF: {}",
+                    "- SCREEN_CMD: {\"cmd\":\"back/home/scroll_down/scroll_up/click/type\",\"target\":\"teks tombol atau input\"}",
+                    "- OPEN_APP: {\"app\":\"nama aplikasi\"}",
+                    "Jika hanya obrolan biasa tanpa perintah HP, jangan sertakan tag [ACTION:...]."
+                ).joinToString("\n")
+
+                val contentsArray = JSONArray()
+                synchronized(conversationHistory) {
+                    for ((u, a) in conversationHistory.takeLast(6)) {
+                        contentsArray.put(JSONObject().put("role", "user").put("parts", JSONArray().put(JSONObject().put("text", u))))
+                        contentsArray.put(JSONObject().put("role", "model").put("parts", JSONArray().put(JSONObject().put("text", a))))
+                    }
+                }
+                contentsArray.put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("parts", JSONArray().put(JSONObject().put("text", userText)))
+                )
+
+                val body = JSONObject()
+                    .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
+                    .put("contents", contentsArray)
+
+                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+                    writer.write(body.toString())
+                }
+
+                val code = conn.responseCode
+                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+                val rawResponse = stream.bufferedReader().use { it.readText() }
+
+                if (code !in 200..299) {
+                    return@withContext "Koneksi AI bermasalah (kode $code). Periksa API Key atau koneksi internetmu."
+                }
+
+                val json = JSONObject(rawResponse)
+                val replyText = json
+                    .getJSONArray("candidates")
+                    .getJSONObject(0)
+                    .getJSONObject("content")
+                    .getJSONArray("parts")
+                    .getJSONObject(0)
+                    .getString("text")
+                    .trim()
+
+                val actionRegex = Regex("\\[ACTION:(\\{.*?\\})\\]", RegexOption.DOT_MATCHES_ALL)
+                val match = actionRegex.find(replyText)
+                if (match != null) {
+                    val spokenPart = replyText.removeRange(match.range).trim()
+                    val actionObj = JSONObject(match.groupValues[1])
+                    val actionType = actionObj.optString("type", "")
+                    val params = actionObj.optJSONObject("params") ?: JSONObject()
+                    val execFeedback = withContext(Dispatchers.Main) {
+                        DeviceController.executeAction(context, actionType, params)
+                    }
+                    return@withContext if (spokenPart.isNotEmpty()) "$spokenPart $execFeedback" else execFeedback
+                }
+
+                return@withContext replyText.replace("*", "").replace("#", "")
+            } catch (e: Exception) {
+                return@withContext "Maaf, jaringan sedang tidak stabil: ${e.localizedMessage ?: "error"}"
+            }
+        }
+}
