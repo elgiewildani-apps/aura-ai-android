@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">AURA AI 24/7</string>
+    <string name="accessibility_service_label">AURA AI Kontrol Layar &amp; Otomatisasi</string>
+    <string name="accessibility_service_desc">Mengizinkan AURA AI membantu mengetik pesan WhatsApp, mencari tiket di Traveloka dan KAI Access, memesan Gojek, memutar YouTube, serta menekan tombol otomatis sesuai perintah suaramu.</string>
+    <string name="notification_listener_label">AURA AI Pembaca Notifikasi</string>
+</resources>
