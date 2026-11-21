@@ -26,14 +26,14 @@ object GeminiBrain {
             return offlineResult
         }
 
-        val apiKey = AuraConfig.getApiKey(context)
+        val apiKey = AuraConfig.getApiKey(context).trim()
         if (apiKey.isNotEmpty()) {
             val aiResponse = callGeminiApi(context, apiKey, clean)
             recordTurn(clean, aiResponse)
             return aiResponse
         }
 
-        val fallback = "Aku mengerti ucapanmu: $clean. Untuk ngobrol bebas 24 jam tentang topik apa saja, masukkan Gemini API Key di layar utama AURA."
+        val fallback = "Perintah diterima: $clean. Tempel Gemini API Key (AIzaSy...) lalu tekan Simpan agar obrolan AI aktif."
         recordTurn(clean, fallback)
         return fallback
     }
@@ -190,18 +190,28 @@ object GeminiBrain {
         return null
     }
 
+    private fun requestModel(modelName: String, apiKey: String, payload: String): Pair<Int, String> {
+        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey")
+        val conn = (url.openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+            connectTimeout = 15000
+            readTimeout = 20000
+            doOutput = true
+        }
+        OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
+            writer.write(payload)
+        }
+        val code = conn.responseCode
+        val stream = if (code in 200..299) conn.inputStream else conn.errorStream
+        val body = stream?.bufferedReader()?.use { it.readText() } ?: ""
+        conn.disconnect()
+        return code to body
+    }
+
     private suspend fun callGeminiApi(context: Context, apiKey: String, userText: String): String =
         withContext(Dispatchers.IO) {
             try {
-                val url = URL("https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey")
-                val conn = (url.openConnection() as HttpURLConnection).apply {
-                    requestMethod = "POST"
-                    setRequestProperty("Content-Type", "application/json; charset=UTF-8")
-                    connectTimeout = 15000
-                    readTimeout = 20000
-                    doOutput = true
-                }
-
                 val systemInstruction = listOf(
                     "Kamu adalah AURA, asisten AI pribadi Android 24/7 yang ramah, cerdas, dan berbicara Bahasa Indonesia natural (singkat, jelas, enak didengar lewat suara TTS, hindari simbol bintang atau pagar).",
                     "Jika pengguna meminta melakukan tindakan di HP, jawab singkat lalu akhiri dengan tepat SATU tag JSON di baris paling akhir:",
@@ -237,20 +247,25 @@ object GeminiBrain {
                         .put("parts", JSONArray().put(JSONObject().put("text", userText)))
                 )
 
-                val body = JSONObject()
+                val payload = JSONObject()
                     .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
                     .put("contents", contentsArray)
+                    .toString()
 
-                OutputStreamWriter(conn.outputStream, Charsets.UTF_8).use { writer ->
-                    writer.write(body.toString())
+                val models = listOf("gemini-2.0-flash", "gemini-1.5-flash")
+                var lastCode = 0
+                var rawResponse = ""
+
+                for (modelName in models) {
+                    val (code, body) = requestModel(modelName, apiKey, payload)
+                    lastCode = code
+                    rawResponse = body
+                    if (code in 200..299) break
+                    if (code != 404 && code != 400) break
                 }
 
-                val code = conn.responseCode
-                val stream = if (code in 200..299) conn.inputStream else conn.errorStream
-                val rawResponse = stream.bufferedReader().use { it.readText() }
-
-                if (code !in 200..299) {
-                    return@withContext "Koneksi AI bermasalah (kode $code). Periksa API Key atau koneksi internetmu."
+                if (lastCode !in 200..299) {
+                    return@withContext "Koneksi AI bermasalah (kode $lastCode). Pastikan API Key valid dan Gemini API aktif di Google AI Studio."
                 }
 
                 val json = JSONObject(rawResponse)
@@ -278,7 +293,7 @@ object GeminiBrain {
 
                 return@withContext replyText.replace("*", "").replace("#", "")
             } catch (e: Exception) {
-                return@withContext "Maaf, jaringan sedang tidak stabil: ${e.localizedMessage ?: "error"}"
+                return@withContext "Maaf, koneksi sedang tidak stabil: ${e.localizedMessage ?: "error"}"
             }
         }
 }
