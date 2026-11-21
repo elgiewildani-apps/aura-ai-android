@@ -33,7 +33,7 @@ object GeminiBrain {
             return aiResponse
         }
 
-        val fallback = "Perintah diterima: $clean. Tempel Gemini API Key (AIzaSy...) lalu tekan Simpan agar obrolan AI aktif."
+        val fallback = "Perintah diterima: $clean. Tempel Gemini API Key lalu tekan Simpan agar obrolan AI aktif."
         recordTurn(clean, fallback)
         return fallback
     }
@@ -190,8 +190,8 @@ object GeminiBrain {
         return null
     }
 
-    private fun requestModel(modelName: String, apiKey: String, payload: String): Pair<Int, String> {
-        val url = URL("https://generativelanguage.googleapis.com/v1beta/models/$modelName:generateContent?key=$apiKey")
+    private fun requestEndpoint(endpointUrl: String, payload: String): Pair<Int, String> {
+        val url = URL(endpointUrl)
         val conn = (url.openConnection() as HttpURLConnection).apply {
             requestMethod = "POST"
             setRequestProperty("Content-Type", "application/json; charset=UTF-8")
@@ -212,7 +212,7 @@ object GeminiBrain {
     private suspend fun callGeminiApi(context: Context, apiKey: String, userText: String): String =
         withContext(Dispatchers.IO) {
             try {
-                val systemInstruction = listOf(
+                val instructionText = listOf(
                     "Kamu adalah AURA, asisten AI pribadi Android 24/7 yang ramah, cerdas, dan berbicara Bahasa Indonesia natural (singkat, jelas, enak didengar lewat suara TTS, hindari simbol bintang atau pagar).",
                     "Jika pengguna meminta melakukan tindakan di HP, jawab singkat lalu akhiri dengan tepat SATU tag JSON di baris paling akhir:",
                     "[ACTION:{\"type\":\"NAMA_AKSI\",\"params\":{...}}]",
@@ -247,17 +247,34 @@ object GeminiBrain {
                         .put("parts", JSONArray().put(JSONObject().put("text", userText)))
                 )
 
-                val payload = JSONObject()
-                    .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", systemInstruction))))
+                val v1betaPayload = JSONObject()
+                    .put("systemInstruction", JSONObject().put("parts", JSONArray().put(JSONObject().put("text", instructionText))))
                     .put("contents", contentsArray)
                     .toString()
 
-                val models = listOf("gemini-2.0-flash", "gemini-1.5-flash")
+                val v1Contents = JSONArray()
+                v1Contents.put(
+                    JSONObject()
+                        .put("role", "user")
+                        .put("parts", JSONArray().put(JSONObject().put("text", "$instructionText\n\nPesan pengguna: $userText")))
+                )
+                val v1Payload = JSONObject()
+                    .put("contents", v1Contents)
+                    .toString()
+
+                val targets = listOf(
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey" to v1betaPayload,
+                    "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=$apiKey" to v1betaPayload,
+                    "https://generativelanguage.googleapis.com/v1/models/gemini-2.5-flash:generateContent?key=$apiKey" to v1Payload,
+                    "https://generativelanguage.googleapis.com/v1/models/gemini-2.0-flash:generateContent?key=$apiKey" to v1Payload,
+                    "https://generativelanguage.googleapis.com/v1/models/gemini-1.5-flash:generateContent?key=$apiKey" to v1Payload
+                )
+
                 var lastCode = 0
                 var rawResponse = ""
 
-                for (modelName in models) {
-                    val (code, body) = requestModel(modelName, apiKey, payload)
+                for ((endpoint, payload) in targets) {
+                    val (code, body) = requestEndpoint(endpoint, payload)
                     lastCode = code
                     rawResponse = body
                     if (code in 200..299) break
