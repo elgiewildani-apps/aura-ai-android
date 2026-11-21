@@ -197,9 +197,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun appendLog(line: String) {
         val current = tvChatLog.text.toString()
-        val updated = "$current
-
-$line"
+        val updated = "$current$line"
         tvChatLog.text = if (updated.length > 4000) updated.takeLast(4000) else updated
     }
 }
