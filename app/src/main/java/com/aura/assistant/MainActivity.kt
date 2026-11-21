@@ -163,11 +163,12 @@ class MainActivity : AppCompatActivity() {
         val batOk = if (isIgnoringBatteryOptimizations()) "OK" else "Belum"
 
         tvPermissionSummary.text =
-            "Mikrofon: $micOk \vert{} Floating:$overlayOk | Kontrol Layar: $accOk \vert{} Notifikasi: $notifOk \vert{} Baterai: $batOk"
+            "Mikrofon: $micOk, Floating: $overlayOk, Kontrol Layar: $accOk, Notifikasi: $notifOk, Baterai: $batOk"
     }
 
-    private fun hasMicPermission(): Boolean =
-        ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    private fun hasMicPermission(): Boolean {
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    }
 
     private fun requestAllBasicPermissions() {
         val perms = mutableListOf(
@@ -191,4 +192,14 @@ class MainActivity : AppCompatActivity() {
 
     private fun isIgnoringBatteryOptimizations(): Boolean {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.M) return true
-        val pm = getSystemService
+        val pm = applicationContext.getSystemService(Context.POWER_SERVICE) as PowerManager
+        return pm.isIgnoringBatteryOptimizations(packageName)
+    }
+
+    private fun appendLog(line: String) {
+        val current = tvChatLog.text.toString()
+        val sep = System.lineSeparator()
+        val updated = if (current.isEmpty()) line else "$current$sep$line"
+        tvChatLog.text = if (updated.length > 4000) updated.takeLast(4000) else updated
+    }
+}
